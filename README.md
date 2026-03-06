@@ -54,3 +54,22 @@ All external models are currently mocked in `backend.py` so the app runs without
 - **Groq**: Replace `_mock_groq_rerank` with reranking / fast inference over candidate outfits using Groq-hosted models.
 
 All of these should be implemented as **pure Python** functions inside `backend.py`, keeping the stack consistent.
+
+---
+
+## Groq setup (to get varied outputs)
+
+`backend.py` supports Groq via the OpenAI-compatible endpoint. Set your key in an environment variable (recommended) or replace the placeholder `xyz`.
+
+PowerShell:
+
+```bash
+$env:GROQ_API_KEY="your_real_key"
+uvicorn backend:app --reload --port 8000
+```
+
+Optional: choose a model:
+
+```bash
+$env:GROQ_MODEL="llama-3.1-8b-instant"
+```
