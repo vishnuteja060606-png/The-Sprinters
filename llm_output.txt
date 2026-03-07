@@ -1,0 +1,7 @@
+DEBUG LLM OUTPUT: ```json
+{
+  "detected_style": ["streetwear", "casual", "sporty"],
+  "color_palette": ["yellow", "white", "blue"],
+  "fit_feedback": "The outfit is very vibrant and eye-catching with a consistent yellow color scheme. The cropped hoodie paired with sweatpants creates a relaxed, sporty look, perfect for casual outings or a trendy street style. The white boots add a pop of contrast and elevate the overall look, making it more stylish. The fit appears to be comfortable and practical, with the cropped hoodie providing a good balance between coverage and modernity. The outfit is suitable for warm weather, and the color palette would work well in various settings, from a casual weekend to a more dressed-up event with the right accessories."
+}
+```

@@ -2,12 +2,40 @@ from typing import List, Optional
 
 import json
 import os
-
 import requests
 
-from fastapi import FastAPI
-from pydantic import BaseModel
+from fastapi import FastAPI, HTTPException, Depends, status
+from pydantic import BaseModel, EmailStr
 from fastapi.middleware.cors import CORSMiddleware
+from huggingface_hub import InferenceClient
+from sqlalchemy.orm import Session
+from fastapi.security import OAuth2PasswordBearer
+import backend_auth
+
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/login")
+
+def get_current_user(token: str = Depends(oauth2_scheme)):
+    email = backend_auth.decode_access_token(token)
+    if email is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Could not validate credentials",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    return email
+
+# Auth Pydantic Models
+class UserCreate(BaseModel):
+    email: EmailStr
+    password: str
+
+class UserLogin(BaseModel):
+    email: str
+    password: str
+
+class Token(BaseModel):
+    access_token: str
+    token_type: str
 
 
 class UserProfile(BaseModel):
@@ -49,62 +77,19 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-
-def _mock_gemini_style_explanation(profile: UserProfile) -> str:
-    goals = ", ".join(profile.style_goals) if profile.style_goals else "everyday versatility"
-    occasions = ", ".join(profile.occasions) if profile.occasions else "casual wear"
-    return (
-        "These outfits balance comfort and structure, focusing on "
-        f"{goals} suitable for {occasions}. Silhouettes stay clean so you can mix pieces easily."
-    )
-
-
-def _mock_hf_trend_tags(profile: UserProfile) -> List[str]:
-    tags: List[str] = ["clean-core", "elevated-basics"]
-    if "streetwear" in [g.lower() for g in profile.style_goals]:
-        tags.append("modern-street")
-    if "formal" in [o.lower() for o in profile.occasions]:
-        tags.append("tailored-minimal")
-    return tags
-
-
-def _mock_ibm_style_rules(profile: UserProfile) -> List[str]:
-    rules: List[str] = []
-    if profile.budget_level == "low":
-        rules.append("Prioritize versatile staples that re-style across many outfits.")
-    if profile.preferred_colors:
-        rules.append(
-            f"Anchor looks around {', '.join(profile.preferred_colors)} with 1 neutral base tone."
-        )
-    if profile.disliked_items:
-        rules.append(f"Avoid: {', '.join(profile.disliked_items)}.")
-    if not rules:
-        rules.append("Keep outfits modular so pieces work across multiple occasions.")
-    return rules
-
-
-def _mock_groq_rerank(recs: List[OutfitRecommendation]) -> List[OutfitRecommendation]:
-    return sorted(recs, key=lambda r: r.confidence, reverse=True)
-
-
-GROQ_API_KEY = "xyz"  # <-- replace with your real key OR set env var GROQ_API_KEY
+GROQ_API_KEY = "your_groq_api_key_here"
 GROQ_API_BASE = "https://api.groq.com/openai/v1"
 GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.1-8b-instant")
+HF_TOKEN = "your_hf_token_here"
+HF_VISION_MODEL = "Qwen/Qwen2.5-VL-7B-Instruct"
 
 
-def _groq_key() -> Optional[str]:
-    return os.getenv("GROQ_API_KEY") or GROQ_API_KEY
+def _groq_key() -> str:
+    return GROQ_API_KEY
 
 
 def _groq_chat_json(system: str, user: str, *, timeout_s: int = 30) -> Optional[dict]:
-    """
-    Calls Groq's OpenAI-compatible Chat Completions endpoint and tries to parse a JSON object
-    from the assistant's response content.
-    """
     api_key = _groq_key()
-    if not api_key or api_key.strip().lower() in {"", "xyz"}:
-        return None
-
     url = f"{GROQ_API_BASE}/chat/completions"
     headers = {
         "Authorization": f"Bearer {api_key}",
@@ -117,41 +102,36 @@ def _groq_chat_json(system: str, user: str, *, timeout_s: int = 30) -> Optional[
             {"role": "system", "content": system},
             {"role": "user", "content": user},
         ],
-        # Ask for JSON-only output; some models still wrap it in text, so we parse defensively.
         "response_format": {"type": "json_object"},
     }
 
-    resp = requests.post(url, headers=headers, json=payload, timeout=timeout_s)
-    resp.raise_for_status()
-    data = resp.json()
-    content = data["choices"][0]["message"]["content"]
-
     try:
-        return json.loads(content)
-    except json.JSONDecodeError:
-        # Fallback: attempt to extract the first JSON object from the text.
-        start = content.find("{")
-        end = content.rfind("}")
-        if start != -1 and end != -1 and end > start:
-            try:
+        resp = requests.post(url, headers=headers, json=payload, timeout=timeout_s)
+        resp.raise_for_status()
+        data = resp.json()
+        content = data["choices"][0]["message"]["content"]
+        
+        try:
+            return json.loads(content)
+        except json.JSONDecodeError:
+            start = content.find("{")
+            end = content.rfind("}")
+            if start != -1 and end != -1 and end > start:
                 return json.loads(content[start : end + 1])
-            except json.JSONDecodeError:
-                return None
+        return None
+    except Exception as e:
+        print(f"Error calling Groq API: {e}")
         return None
 
 
-def _groq_generate_outfits(profile: UserProfile) -> Optional[List[OutfitRecommendation]]:
-    """
-    Uses Groq to generate outfit recommendations that vary with the user's inputs.
-    Returns validated OutfitRecommendation objects, or None on failure.
-    """
+def _groq_generate_outfits(profile: UserProfile) -> Optional[RecommendationResponse]:
     system = (
         "You are an expert personal stylist. Return ONLY valid JSON. "
         "You must follow the user's constraints strictly (dislikes, budget, occasions, colors)."
     )
     user = (
         "Generate 3 distinct outfit recommendations.\n"
-        "Return a JSON object with this schema:\n"
+        "Return a JSON object with this exact schema:\n"
         "{\n"
         '  "recommendations": [\n'
         "    {\n"
@@ -161,7 +141,9 @@ def _groq_generate_outfits(profile: UserProfile) -> Optional[List[OutfitRecommen
         '      "style_tags": [string, ...],\n'
         '      "confidence": number 0..1\n'
         "    }\n"
-        "  ]\n"
+        "  ],\n"
+        '  "trend_notes": "string explaining how the outfits balance the goals and occasions",\n'
+        '  "styling_tips": ["string", "string"] (3-5 specific styling rules based on the constraints)\n'
         "}\n\n"
         "User profile:\n"
         f"- Age: {profile.age}\n"
@@ -181,85 +163,163 @@ def _groq_generate_outfits(profile: UserProfile) -> Optional[List[OutfitRecommen
         recs_raw = obj["recommendations"]
         recs: List[OutfitRecommendation] = [
             OutfitRecommendation(
-                title=str(r["title"]),
-                description=str(r["description"]),
+                title=str(r.get("title", "Outfit")),
+                description=str(r.get("description", "")),
                 pieces=[str(x) for x in r.get("pieces", [])],
                 style_tags=[str(x) for x in r.get("style_tags", [])],
                 confidence=float(r.get("confidence", 0.75)),
             )
             for r in recs_raw
         ]
-        if not recs:
-            return None
-        return _mock_groq_rerank(recs)[:3]
-    except Exception:
+        
+        return RecommendationResponse(
+            recommendations=sorted(recs, key=lambda r: r.confidence, reverse=True)[:3],
+            trend_notes=str(obj.get("trend_notes", "These outfits match your goals.")),
+            styling_tips=[str(x) for x in obj.get("styling_tips", ["Wear with confidence!"])],
+        )
+    except Exception as e:
+        print(f"Parse error: {e}")
         return None
 
 
-def _build_mock_outfits(profile: UserProfile) -> List[OutfitRecommendation]:
-    base_tags = _mock_hf_trend_tags(profile)
+def _hf_analyze_image(request: ImageAnalysisRequest) -> Optional[dict]:
+    import time
+    import base64
+    
+    # Fetch the image to bypass 403s/404s on Google/Pinterest
+    try:
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Accept-Encoding": "gzip, deflate, br, zstd",
+            "Connection": "keep-alive",
+            "Upgrade-Insecure-Requests": "1",
+            "Sec-Ch-Ua": '"Chromium";v="122", "Not(A:Brand";v="24", "Google Chrome";v="122"',
+            "Sec-Ch-Ua-Mobile": "?0",
+            "Sec-Ch-Ua-Platform": '"Windows"',
+            "Sec-Fetch-Dest": "document",
+            "Sec-Fetch-Mode": "navigate",
+            "Sec-Fetch-Site": "none",
+            "Sec-Fetch-User": "?1",
+            "DNT": "1",
+            "Pragma": "no-cache",
+            "Cache-Control": "no-cache",
+            "Referer": "https://www.google.com/"
+        }
+        
+        # Some URLs need a proper session to handle cookies/redirects
+        session = requests.Session()
+        img_resp = session.get(request.image_url, headers=headers, timeout=10, allow_redirects=True)
+        img_resp.raise_for_status()
+        
+        # Verify it's actually an image and not a 1x1 tracking pixel or HTML page
+        if len(img_resp.content) < 100 or 'text/html' in img_resp.headers.get('Content-Type', ''):
+            raise Exception("URL returned HTML or an empty/tracking pixel image.")
+        
+        content_type = img_resp.headers.get("Content-Type", "image/jpeg")
+        base64_img = base64.b64encode(img_resp.content).decode('utf-8')
+        data_uri = f"data:{content_type};base64,{base64_img}"
+    except requests.exceptions.HTTPError as e:
+        status = e.response.status_code
+        error_msg = f"Failed to fetch image: Server returned {status} (which means the image link is broken or protected)."
+        print(f"DEBUG: {error_msg}")
+        raise HTTPException(status_code=400, detail=error_msg)
+    except Exception as e:
+        error_msg = f"Failed to download image URL. Ensure it's a direct, publicly accessible image link. Error: {str(e)}"
+        print(f"DEBUG: {error_msg}")
+        raise HTTPException(status_code=400, detail=error_msg)
 
-    recs: List[OutfitRecommendation] = [
-        OutfitRecommendation(
-            title="Smart Casual Day Outfit",
-            description=(
-                "Crisp shirt layered with relaxed trousers and clean sneakers. "
-                "Easy to dress up with a blazer or keep casual with a light overshirt."
-            ),
-            pieces=[
-                "White or light blue button-up shirt",
-                "Relaxed-fit neutral trousers",
-                "Minimal white sneakers",
-                "Optional lightweight blazer or overshirt",
-            ],
-            style_tags=base_tags + ["smart-casual"],
-            confidence=0.88,
-        ),
-        OutfitRecommendation(
-            title="Weekend Off-Duty Look",
-            description=(
-                "Soft knit top with straight-leg denim and comfortable sneakers or loafers. "
-                "Layer with a structured jacket for extra polish."
-            ),
-            pieces=[
-                "Fine-knit sweater or premium tee",
-                "Straight-leg mid-wash jeans",
-                "Retro sneakers or loafers",
-                "Short structured jacket or bomber",
-            ],
-            style_tags=base_tags + ["off-duty"],
-            confidence=0.83,
-        ),
-        OutfitRecommendation(
-            title="Evening Minimalist Outfit",
-            description=(
-                "Monochrome base with a statement texture. "
-                "Balanced proportions keep it modern and flattering."
-            ),
-            pieces=[
-                "Monochrome top and bottom (e.g., all black or all navy)",
-                "Textured layer (leather, satin, or structured knit)",
-                "Sleek boots or heeled sandals",
-            ],
-            style_tags=base_tags + ["evening"],
-            confidence=0.81,
-        ),
-    ]
+    for attempt in range(3):
+        try:
+            client = InferenceClient(api_key=HF_TOKEN, model=HF_VISION_MODEL)
+            prompt = (
+                "Analyze this fashion look. "
+                f"Optional notes from user: {request.notes or 'None'}. "
+                "Return ONLY JSON with exactly these keys: 'detected_style' (list of strings), 'color_palette' (list of strings), 'fit_feedback' (string detailing styling and fit suggestions)."
+            )
+            
+            messages = [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": prompt},
+                        {"type": "image_url", "image_url": {"url": data_uri}}
+                    ]
+                }
+            ]
+            
+            response = client.chat.completions.create(
+                messages=messages,
+                max_tokens=500,
+            )
+            content = response.choices[0].message.content
+            print(f"DEBUG LLM OUTPUT: {content}")
+            
+            # Manually extract JSON from the LLM text output
+            start = content.find("{")
+            end = content.rfind("}")
+            if start != -1 and end != -1 and end > start:
+                try:
+                    return json.loads(content[start : end + 1])
+                except json.JSONDecodeError:
+                    pass
+            print(f"DEBUG: Could not find valid JSON boundaries on attempt {attempt+1}")
+        except Exception as e:
+            import traceback
+            print(f"Error on Hugging Face Vision API (attempt {attempt+1}): {e}")
+            traceback.print_exc()
+        
+        # small delay before retry
+        time.sleep(1.5)
+        
+    return None
 
-    return _mock_groq_rerank(recs)
+
+@app.post("/api/signup", response_model=Token)
+def signup(user: UserCreate, db: Session = Depends(backend_auth.get_db)):
+    db_user = db.query(backend_auth.User).filter(backend_auth.User.email == user.email).first()
+    if db_user:
+        raise HTTPException(status_code=400, detail="Email already registered")
+    
+    hashed_pwd = backend_auth.get_password_hash(user.password)
+    new_user = backend_auth.User(email=user.email, hashed_password=hashed_pwd)
+    db.add(new_user)
+    db.commit()
+    db.refresh(new_user)
+    
+    from datetime import timedelta
+    access_token_expires = timedelta(minutes=backend_auth.ACCESS_TOKEN_EXPIRE_MINUTES)
+    access_token = backend_auth.create_access_token(
+        data={"sub": new_user.email}, expires_delta=access_token_expires
+    )
+    return {"access_token": access_token, "token_type": "bearer"}
+
+
+@app.post("/api/login", response_model=Token)
+def login(user: UserLogin, db: Session = Depends(backend_auth.get_db)):
+    db_user = db.query(backend_auth.User).filter(backend_auth.User.email == user.email).first()
+    if not db_user or not backend_auth.verify_password(user.password, db_user.hashed_password):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Incorrect email or password",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+        
+    from datetime import timedelta
+    access_token_expires = timedelta(minutes=backend_auth.ACCESS_TOKEN_EXPIRE_MINUTES)
+    access_token = backend_auth.create_access_token(
+        data={"sub": db_user.email}, expires_delta=access_token_expires
+    )
+    return {"access_token": access_token, "token_type": "bearer"}
 
 
 @app.post("/api/recommend", response_model=RecommendationResponse)
-def recommend_outfits(profile: UserProfile) -> RecommendationResponse:
-    outfits = _groq_generate_outfits(profile) or _build_mock_outfits(profile)
-    explanation = _mock_gemini_style_explanation(profile)
-    rules = _mock_ibm_style_rules(profile)
-
-    return RecommendationResponse(
-        recommendations=outfits,
-        trend_notes=explanation,
-        styling_tips=rules,
-    )
+def recommend_outfits(profile: UserProfile, current_user: str = Depends(get_current_user)) -> RecommendationResponse:
+    response = _groq_generate_outfits(profile)
+    if not response:
+        raise HTTPException(status_code=500, detail="Failed to generate recommendations via Groq AI")
+    return response
 
 
 class ImageAnalysisResponse(BaseModel):
@@ -269,18 +329,21 @@ class ImageAnalysisResponse(BaseModel):
 
 
 @app.post("/api/analyze-image", response_model=ImageAnalysisResponse)
-def analyze_image(payload: ImageAnalysisRequest) -> ImageAnalysisResponse:
-    return ImageAnalysisResponse(
-        detected_style=["minimal", "casual", "trend-aware"],
-        color_palette=["black", "white", "denim blue"],
-        fit_feedback=(
-            "Silhouette is balanced overall. You could size up outerwear slightly "
-            "for a more relaxed drape, or add a tapered bottom to sharpen the look."
-        ),
-    )
+def analyze_image(payload: ImageAnalysisRequest, current_user: str = Depends(get_current_user)) -> ImageAnalysisResponse:
+    obj = _hf_analyze_image(payload)
+    if not obj:
+        raise HTTPException(status_code=500, detail="Failed to analyze image via Hugging Face")
+        
+    try:
+        return ImageAnalysisResponse(
+            detected_style=[str(x) for x in obj.get("detected_style", ["casual"])],
+            color_palette=[str(x) for x in obj.get("color_palette", ["mixed"])],
+            fit_feedback=str(obj.get("fit_feedback", "Looking great!")),
+        )
+    except Exception:
+        raise HTTPException(status_code=500, detail="Invalid response format from Groq AI")
 
 
 @app.get("/health")
 def health() -> dict:
     return {"status": "ok"}
-

@@ -1,0 +1,47 @@
+remote: error: GH013: Repository rule violations found for refs/heads/main.        
+remote: 
+remote: - GITHUB PUSH PROTECTION        
+remote:   —————————————————————————————————————————        
+remote:     Resolve the following violations before pushing again        
+remote: 
+remote:     - Push cannot contain secrets        
+remote: 
+remote:             
+remote:      (?) Learn how to resolve a blocked push        
+remote:      https://docs.github.com/code-security/secret-scanning/working-with-secret-scanning-and-push-protection/working-with-push-protection-from-the-command-line#resolving-a-blocked-push        
+remote:             
+remote:             
+remote:       —— Groq API Key ——————————————————————————————————————        
+remote:        locations:        
+remote:          - commit: 0152056765ee34289a5c23207f0be43429199fa8        
+remote:            path: backend.py:52        
+remote:          - commit: 8c3d1a70483a19378e6ef98a58d8392136f222c0        
+remote:            path: backend.py:80        
+remote:          - commit: 0152056765ee34289a5c23207f0be43429199fa8        
+remote:            path: test_vision.py:4        
+remote:             
+remote:        (?) To push, remove secret from commit(s) or follow this URL to allow the secret.        
+remote:        https://github.com/vishnuteja060606-png/The-Sprinters/security/secret-scanning/unblock-secret/3AZq4g8oli0MTtpe1N3IeWFuWOR        
+remote:             
+remote:             
+remote:       —— Hugging Face User Access Token ————————————————————        
+remote:        locations:        
+remote:          - commit: 0152056765ee34289a5c23207f0be43429199fa8        
+remote:            path: backend.py:55        
+remote:          - commit: 8c3d1a70483a19378e6ef98a58d8392136f222c0        
+remote:            path: backend.py:83        
+remote:          - commit: 8c3d1a70483a19378e6ef98a58d8392136f222c0        
+remote:            path: test_hf.py:5        
+remote:          - commit: 8c3d1a70483a19378e6ef98a58d8392136f222c0        
+remote:            path: test_hf_qwen.py:5        
+remote:          - commit: 0152056765ee34289a5c23207f0be43429199fa8        
+remote:            path: test_hf_vision.py:4        
+remote:             
+remote:        (?) To push, remove secret from commit(s) or follow this URL to allow the secret.        
+remote:        https://github.com/vishnuteja060606-png/The-Sprinters/security/secret-scanning/unblock-secret/3AZq4jMzEJhdSle2KuR3ovcZiaw        
+remote:             
+remote: 
+remote: 
+To https://github.com/vishnuteja060606-png/The-Sprinters.git
+ ! [remote rejected] main -> main (push declined due to repository rule violations)
+error: failed to push some refs to 'https://github.com/vishnuteja060606-png/The-Sprinters.git'

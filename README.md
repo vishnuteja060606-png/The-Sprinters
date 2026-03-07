@@ -27,13 +27,13 @@ pip install -r requirements.txt
 2. **Run the FastAPI backend**
 
 ```bash
-uvicorn backend:app --reload --host 0.0.0.0 --port 8000
+python -m uvicorn backend:app --reload --host 0.0.0.0 --port 8000
 ```
 
 3. **Run the Streamlit frontend**
 
 ```bash
-streamlit run frontend.py
+python -m streamlit run frontend.py
 ```
 
 4. Open the URL printed by Streamlit (usually `http://localhost:8501`) and:
@@ -59,12 +59,12 @@ All of these should be implemented as **pure Python** functions inside `backend.
 
 ## Groq setup (to get varied outputs)
 
-`backend.py` supports Groq via the OpenAI-compatible endpoint. Set your key in an environment variable (recommended) or replace the placeholder `xyz`.
+`backend.py` supports Groq via the OpenAI-compatible endpoint. **Do not paste your API key into the code or commit it to git.** Instead, set it in an environment variable.
 
 PowerShell:
 
 ```bash
-$env:GROQ_API_KEY="your_real_key"
+$env:GROQ_API_KEY="your_real_key_here"
 uvicorn backend:app --reload --port 8000
 ```
 

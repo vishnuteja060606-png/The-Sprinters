@@ -9,9 +9,23 @@ API_BASE = "http://localhost:8000"
 
 def _post_json(path: str, payload: dict):
     url = f"{API_BASE}{path}"
-    resp = requests.post(url, json=payload, timeout=20)
-    resp.raise_for_status()
-    return resp.json()
+    headers = {}
+    if "access_token" in st.session_state:
+        headers["Authorization"] = f"Bearer {st.session_state.access_token}"
+    
+    try:
+        resp = requests.post(url, json=payload, headers=headers, timeout=20)
+        if not resp.ok:
+            try:
+                err_msg = resp.json().get("detail", resp.text)
+            except:
+                err_msg = resp.text
+            st.error(f"API Error {resp.status_code}: {err_msg}")
+            return None
+        return resp.json()
+    except Exception as e:
+        st.error(f"Request failed: {e}")
+        return None
 
 
 def _set_page_config() -> None:
@@ -111,8 +125,16 @@ def _sidebar() -> dict:
         disliked_items = [i.strip() for i in disliked_items_text.split(",") if i.strip()]
 
         st.markdown("---")
+        if "access_token" in st.session_state:
+            st.markdown(f"**Logged in as:** {st.session_state.get('user_email', '')}")
+            if st.button("Logout", key="logout_btn"):
+                del st.session_state["access_token"]
+                del st.session_state["user_email"]
+                st.rerun()
+                
+        st.markdown("---")
         st.markdown(
-            '<span class="monosmall">Models: Gemini · Hugging Face · Groq · IBM AI (mocked)</span>',
+            '<span class="monosmall">Powered by Llama 3 on Groq & Qwen on Hugging Face</span>',
             unsafe_allow_html=True,
         )
 
@@ -202,54 +224,103 @@ def _render_recommendations(data: dict) -> None:
 def _image_analysis_ui() -> None:
     st.markdown("### Image-based analysis")
     st.markdown(
-        "Paste an image URL of your current outfit, a moodboard, or an inspiration look. "
-        "In a real deployment this would be a Gemini / Hugging Face vision model."
+        "Paste a **direct image URL** (ending in `.jpg` or `.png`) of your current outfit, a moodboard, or an inspiration look. "
+        "*(Note: Google Images or Pinterest URLs usually block direct access. Right-click the image and select 'Copy Image Address' or use sites like Unsplash)*. "
+        "Powered by Qwen 2.5 VL on Hugging Face."
     )
     img_url = st.text_input("Image URL")
     note = st.text_input("Optional notes", value="This is my daily fit, make it sharper.")
 
     analyze = st.button("Analyze image", key="analyze_image")
     if analyze and img_url:
-        with st.spinner("Analyzing style and fit (mocked)…"):
+        with st.spinner("Analyzing style and fit with Hugging Face Vision…"):
             data = _post_json(
                 "/api/analyze-image",
                 {"image_url": img_url, "notes": note or None},
             )
-        left, right = st.columns([1.3, 1])
-        with left:
-            st.image(img_url, caption="Reference image", use_column_width=True)
-        with right:
-            st.markdown("**Detected style signals**")
-            st.markdown(
-                " ".join(f"<span class='pill'>{t}</span>" for t in data["detected_style"]),
-                unsafe_allow_html=True,
-            )
-            st.markdown("**Color palette**")
-            st.markdown(
-                " ".join(f"<span class='pill'>{c}</span>" for c in data["color_palette"]),
-                unsafe_allow_html=True,
-            )
-            st.markdown("**Fit notes**")
-            st.write(data["fit_feedback"])
+        if data:
+            left, right = st.columns([1.3, 1])
+            with left:
+                st.image(img_url, caption="Reference image", use_column_width=True)
+            with right:
+                st.markdown("**Detected style signals**")
+                st.markdown(
+                    " ".join(f"<span class='pill'>{t}</span>" for t in data["detected_style"]),
+                    unsafe_allow_html=True,
+                )
+                st.markdown("**Color palette**")
+                st.markdown(
+                    " ".join(f"<span class='pill'>{c}</span>" for c in data["color_palette"]),
+                    unsafe_allow_html=True,
+                )
+                st.markdown("**Fit notes**")
+                st.write(data["fit_feedback"])
+
+
+def _auth_ui() -> None:
+    st.markdown("<h2 style='text-align: center; margin-top: 2rem;'>✨ Welcome to AI Fashion Stylist</h2>", unsafe_allow_html=True)
+    st.markdown("<p style='text-align: center; color: #9ca3af;'>Please log in or sign up to access your personal stylist.</p>", unsafe_allow_html=True)
+    
+    col1, col2, col3 = st.columns([1, 1.5, 1])
+    with col2:
+        st.markdown("<div class='card'>", unsafe_allow_html=True)
+        tab1, tab2 = st.tabs(["Log In", "Sign Up"])
+        
+        with tab1:
+            login_email = st.text_input("Email", key="login_email")
+            login_password = st.text_input("Password", type="password", key="login_password")
+            if st.button("Log In", key="login_btn", use_container_width=True):
+                if login_email and login_password:
+                    with st.spinner("Logging in..."):
+                        resp = _post_json("/api/login", {"email": login_email, "password": login_password})
+                        if resp and "access_token" in resp:
+                            st.session_state.access_token = resp["access_token"]
+                            st.session_state.user_email = login_email
+                            st.success("Logged in successfully!")
+                            st.rerun()
+                else:
+                    st.warning("Please enter email and password.")
+                    
+        with tab2:
+            signup_email = st.text_input("Email", key="signup_email")
+            signup_password = st.text_input("Password", type="password", key="signup_password")
+            if st.button("Sign Up", key="signup_btn", use_container_width=True):
+                if signup_email and signup_password:
+                    with st.spinner("Creating account..."):
+                        resp = _post_json("/api/signup", {"email": signup_email, "password": signup_password})
+                        if resp and "access_token" in resp:
+                            st.session_state.access_token = resp["access_token"]
+                            st.session_state.user_email = signup_email
+                            st.success("Account created successfully!")
+                            st.rerun()
+                else:
+                    st.warning("Please enter email and password.")
+        st.markdown("</div>", unsafe_allow_html=True)
 
 
 def main() -> None:
     _set_page_config()
     _inject_css()
+    
+    if "access_token" not in st.session_state:
+        _auth_ui()
+        return
+
     profile_payload = _sidebar()
 
     _hero_section()
 
     st.markdown("### Generate personalized outfits")
     st.markdown(
-        "The backend combines multiple AI signals (text reasoning, trend tags, rule-based constraints, and ranking) "
-        "to build outfits aligned with your profile."
+        "The backend leverages Llama 3 on Groq to build outfits, explain trends, and provide styling tips "
+        "aligned with your profile."
     )
 
     if st.button("Generate outfits", key="gen_outfits"):
-        with st.spinner("Asking your AI stylist… (mocked models)"):
+        with st.spinner("Asking your AI stylist on Groq…"):
             data = _post_json("/api/recommend", profile_payload)
-        _render_recommendations(data)
+        if data:
+            _render_recommendations(data)
     else:
         st.info("Set your profile in the left panel, then click **Generate outfits**.")
 
