@@ -1,7 +1,11 @@
+from dotenv import load_dotenv
+load_dotenv()
+
+import os
 from huggingface_hub import InferenceClient
 import json
 
-HF_TOKEN = "your_hf_token_here"
+HF_TOKEN = os.getenv("HF_TOKEN")
 MODEL_ID = "Qwen/Qwen2.5-VL-7B-Instruct"
 
 def test_hf_vision():

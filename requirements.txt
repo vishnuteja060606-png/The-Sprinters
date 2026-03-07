@@ -3,4 +3,5 @@ uvicorn[standard]
 streamlit
 requests
 pydantic
-
+python-dotenv
+python-jose[cryptography]

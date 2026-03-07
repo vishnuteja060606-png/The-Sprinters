@@ -1,8 +1,12 @@
+from dotenv import load_dotenv
+load_dotenv()
+
+import os
 from huggingface_hub import InferenceClient
 import traceback
 
 try:
-    client = InferenceClient(api_key="your_hf_token_here", model="Qwen/Qwen2.5-VL-7B-Instruct")
+    client = InferenceClient(api_key=os.getenv("HF_TOKEN"), model="Qwen/Qwen2.5-VL-7B-Instruct")
     prompt = (
         "Analyze this fashion look. "
         "Optional notes from user: None. "

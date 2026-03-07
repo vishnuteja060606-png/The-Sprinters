@@ -1,7 +1,11 @@
+from dotenv import load_dotenv
+load_dotenv()
+
+import os
 import requests
 import json
 
-GROQ_API_KEY = "your_groq_api_key_here"
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 GROQ_API_BASE = "https://api.groq.com/openai/v1"
 
 def test_vision():
